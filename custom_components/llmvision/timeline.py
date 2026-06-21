@@ -981,6 +981,12 @@ class Timeline:
                 (os.path.basename(n) or "").lower()
                 for n in await self.get_linked_images()
             }
+            # All frames belonging to a single analysis share the same uid
+            # prefix (e.g. "<uid>-<frame>.jpg"). Protect every sibling frame of
+            # a linked key frame so the full set of logged images is kept.
+            linked_uids = {
+                name.split("-", 1)[0] for name in linked_frames if "-" in name
+            }
 
             # List files in snapshots dir (in executor, non-blocking)
             try:
@@ -1002,9 +1008,14 @@ class Timeline:
                     continue
 
                 base = (file or "").lower()
+                file_uid = base.split("-", 1)[0] if "-" in base else None
 
-                # Protect if linked to an event or pending
-                if base in linked_frames or base in self._pending_key_frames:
+                # Protect if linked to an event, a sibling of a linked frame, or pending
+                if (
+                    base in linked_frames
+                    or base in self._pending_key_frames
+                    or (file_uid is not None and file_uid in linked_uids)
+                ):
                     continue
 
                 # Protect new files (grace window)

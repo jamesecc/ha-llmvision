@@ -36,6 +36,11 @@ class MediaProcessor:
         self.filenames = []
         self.snapshots_path = f"/media/{DOMAIN}/snapshots/"
         self.key_frame = ""
+        # Paths of every frame that was sent to the LLM and written to disk
+        self.exposed_images = []
+        # Shared id for all frames belonging to this analysis so they can be
+        # grouped together (and protected from timeline cleanup) on disk
+        self.uid = uuid.uuid4().hex[:8]
 
     async def _encode_image(self, img):
         """Encode image as base64"""
@@ -74,23 +79,38 @@ class MediaProcessor:
             img = img.convert("RGB")
         return img
 
-    async def _expose_image(self, frame_name, image_data, uid, frame_path=None):
+    async def _expose_image(
+        self, frame_name, image_data, uid=None, frame_path=None, is_key_frame=False
+    ):
+        """Write a frame that was sent to the LLM to the snapshots directory.
+
+        Every exposed frame is saved to disk so that all images sent to the
+        model are logged (not just the key frame). Saved paths are tracked in
+        ``self.exposed_images``. The frame flagged as the key frame (or, if
+        none is flagged, the first exposed frame) is stored in
+        ``self.key_frame`` and is what gets linked in the timeline.
+        """
+        uid = uid or self.uid
         # ensure /media/llmvision/snapshots dir exists
         await self.hass.loop.run_in_executor(
             None,
             partial(os.makedirs, f"/media/{DOMAIN}/snapshots", exist_ok=True),
         )
-        if self.key_frame == "":
-            filename = f"/media/{DOMAIN}/snapshots/{uid}-{frame_name}.jpg"
+        filename = f"/media/{DOMAIN}/snapshots/{uid}-{frame_name}.jpg"
+        if image_data is None and frame_path is not None:
+            # open image in hass.loop
+            with await self.hass.loop.run_in_executor(
+                None, Image.open, frame_path
+            ) as image:
+                await self.hass.loop.run_in_executor(None, image.load)
+                image_data = await self._encode_image(image)
+        await self._save_clip(image_data=image_data, image_path=filename)
+        if filename not in self.exposed_images:
+            self.exposed_images.append(filename)
+        # The first frame flagged as the key frame becomes the representative
+        # key frame for the timeline / notification.
+        if is_key_frame and self.key_frame == "":
             self.key_frame = filename
-            if image_data is None and frame_path is not None:
-                # open image in hass.loop
-                with await self.hass.loop.run_in_executor(
-                    None, Image.open, frame_path
-                ) as image:
-                    await self.hass.loop.run_in_executor(None, image.load)
-                    image_data = await self._encode_image(image)
-            await self._save_clip(image_data=image_data, image_path=filename)
 
     def _similarity_score(self, previous_frame, current_frame_gray):
         """
@@ -488,7 +508,7 @@ class MediaProcessor:
                 reference_bytes, candidate_bytes
             )
 
-            # Add all frames (resized) and expose only the chosen keyframe
+            # Add all frames (resized); they are exposed below if requested
             resized_base64 = []
             for frame_name, frame_data, _ in selected_frames:
                 resized_image = await self.resize_image(
@@ -498,13 +518,14 @@ class MediaProcessor:
                 self.client.add_frame(base64_image=resized_image, filename=frame_name)
 
             if expose_images:
-                key_name = selected_frames[key_idx][0]
-                key_b64 = resized_base64[key_idx]
-                await self._expose_image(
-                    frame_name=key_name.split("-")[0],
-                    image_data=key_b64,
-                    uid=str(uuid.uuid4())[:8],
-                )
+                # Log every frame sent to the LLM, flagging the chosen keyframe
+                for idx, (frame_name, _, _) in enumerate(selected_frames):
+                    await self._expose_image(
+                        frame_name=frame_name,
+                        image_data=resized_base64[idx],
+                        uid=self.uid,
+                        is_key_frame=(idx == key_idx),
+                    )
 
     async def add_images(
         self, image_entities, image_paths, target_width, include_filename, expose_images
@@ -513,6 +534,8 @@ class MediaProcessor:
         base_url = get_url(self.hass)
         # Track successful image entities (cameras that successfully provided frames)
         successful_image_entities = 0
+        # Counter for unique exposed-frame filenames within this analysis
+        frame_index = 0
 
         if image_entities:
             for image_entity in image_entities:
@@ -556,10 +579,12 @@ class MediaProcessor:
 
                     if expose_images:
                         await self._expose_image(
-                            frame_name="0",
+                            frame_name=str(frame_index),
                             image_data=resized_image,
-                            uid=str(uuid.uuid4())[:8],
+                            uid=self.uid,
+                            is_key_frame=(self.key_frame == ""),
                         )
+                        frame_index += 1
 
                     successful_image_entities += 1
 
@@ -599,10 +624,12 @@ class MediaProcessor:
 
                     if expose_images:
                         await self._expose_image(
-                            frame_name="0",
+                            frame_name=str(frame_index),
                             image_data=image_data,
-                            uid=str(uuid.uuid4())[:8],
+                            uid=self.uid,
+                            is_key_frame=(self.key_frame == ""),
                         )
+                        frame_index += 1
                 except Exception as e:
                     raise ServiceValidationError(f"Error: {e}")
         return self.client
@@ -615,6 +642,7 @@ class MediaProcessor:
         target_width=640,
         include_filename=False,
         expose_images=False,
+        video_index=0,
     ):
         try:
             current_event_id = str(uuid.uuid4())
@@ -897,19 +925,21 @@ class MediaProcessor:
                 )
 
             if expose_images and selected_frames:
-                # Expose keyframe if requested
+                # Log every frame sent to the LLM, flagging the chosen keyframe
                 reference_bytes = selected_frames[0][0]
                 candidate_bytes = [fd for (fd, _, _) in selected_frames]
                 key_idx = await self._select_keyframe_index(
                     reference_bytes, candidate_bytes
                 )
                 # selected_frames items are (frame_bytes, score, original_index)
-                frame_idx_label = (selected_frames[key_idx][2] or 0) + 1
-                await self._expose_image(
-                    frame_name=str(frame_idx_label),
-                    image_data=resized_base64[key_idx],
-                    uid=str(uuid.uuid4())[:8],
-                )
+                for idx, (_, _, original_index) in enumerate(selected_frames):
+                    frame_idx_label = (original_index or 0) + 1
+                    await self._expose_image(
+                        frame_name=f"video{video_index}-frame-{frame_idx_label}",
+                        image_data=resized_base64[idx],
+                        uid=self.uid,
+                        is_key_frame=(idx == key_idx),
+                    )
         except Exception as e:
             raise ServiceValidationError(f"Error processing video {video_path}: {e}")
 
@@ -937,7 +967,7 @@ class MediaProcessor:
 
         _LOGGER.debug(f"Processing videos: {video_paths}")
 
-        def process_video(video_path):
+        def process_video(video_path, video_index):
             return self.add_video(
                 video_path=video_path,
                 base_url=base_url,
@@ -945,10 +975,16 @@ class MediaProcessor:
                 target_width=target_width,
                 include_filename=include_filename,
                 expose_images=expose_images,
+                video_index=video_index,
             )
 
         # Process videos in parallel
-        await asyncio.gather(*map(process_video, video_paths))
+        await asyncio.gather(
+            *(
+                process_video(video_path, index)
+                for index, video_path in enumerate(video_paths)
+            )
+        )
 
         return self.client
 

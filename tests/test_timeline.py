@@ -1063,6 +1063,53 @@ class TestCleanup:
         await tl._cleanup()
         assert linked.exists()
 
+    async def test_cleanup_protects_sibling_frames_of_linked_keyframe(
+        self, build_timeline, tmp_path
+    ):
+        """Frames sharing a linked key frame's uid prefix are kept (logged set)."""
+        tl = build_timeline()
+        await tl._initialize_db()
+        media_path = tmp_path / "snapshots"
+        media_path.mkdir()
+        tl._media_path = str(media_path)
+
+        old_ts = datetime.datetime.now().timestamp() - 100
+        # Key frame stored in the event, plus sibling frames sharing its uid
+        key_frame = media_path / "abcd1234-camera0-frame-2.jpg"
+        sibling = media_path / "abcd1234-camera0-frame-0.jpg"
+        unrelated = media_path / "ffff9999-camera0-frame-0.jpg"
+        for f in (key_frame, sibling, unrelated):
+            f.write_bytes(b"fake")
+            os.utime(str(f), (old_ts, old_ts))
+
+        now = dt_util.utcnow()
+        async with aiosqlite.connect(tl._db_path) as db:
+            await db.execute(
+                """INSERT INTO events
+                    (uid, title, start, end, description, key_frame, camera_name, category, label)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(uuid.uuid4()),
+                    "ev",
+                    now.isoformat(),
+                    (now + datetime.timedelta(minutes=1)).isoformat(),
+                    "",
+                    str(key_frame),
+                    "",
+                    "",
+                    "",
+                ),
+            )
+            await db.commit()
+
+        tl._migrating = False
+        await tl._cleanup()
+
+        assert key_frame.exists()
+        assert sibling.exists()
+        # A frame from a different analysis is still cleaned up
+        assert not unrelated.exists()
+
     async def test_cleanup_protects_pending_key_frames(self, build_timeline, tmp_path):
         tl = build_timeline()
         await tl._initialize_db()

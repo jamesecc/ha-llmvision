@@ -705,6 +705,10 @@ def setup(hass, config):
         if processor.key_frame:
             _LOGGER.info(f"Key frame: {processor.key_frame}")
             response["key_frame"] = processor.key_frame
+        # Add all logged frames (every image sent to the LLM) if exposed
+        if processor.exposed_images:
+            _LOGGER.info(f"Exposed images: {processor.exposed_images}")
+            response["exposed_images"] = processor.exposed_images
 
         await _create_event(
             hass=hass,
@@ -743,6 +747,9 @@ def setup(hass, config):
         # Add processor.key_frame to response if it exists
         if processor.key_frame:
             response["key_frame"] = processor.key_frame
+        # Add all logged frames (every image sent to the LLM) if exposed
+        if processor.exposed_images:
+            response["exposed_images"] = processor.exposed_images
 
         await _create_event(
             hass=hass,
@@ -784,6 +791,9 @@ def setup(hass, config):
         # Add processor.key_frame to response if it exists
         if processor.key_frame:
             response["key_frame"] = processor.key_frame
+        # Add all logged frames (every image sent to the LLM) if exposed
+        if processor.exposed_images:
+            response["exposed_images"] = processor.exposed_images
 
         await _create_event(
             hass=hass,

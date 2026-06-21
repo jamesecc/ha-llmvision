@@ -128,8 +128,8 @@ class TestMediaProcessor:
         assert output.read_bytes() == b"image-bytes"
 
     @pytest.mark.asyncio
-    async def test_expose_image_uses_frame_path_once(self, processor, tmp_path):
-        """_expose_image should derive image data from a file only for the first keyframe."""
+    async def test_expose_image_logs_every_frame(self, processor, tmp_path):
+        """_expose_image should save every frame and track all logged paths."""
         processor.hass.loop.run_in_executor.side_effect = (
             lambda _executor, func, *args: func(*args)
         )
@@ -143,15 +143,20 @@ class TestMediaProcessor:
                 image_data=None,
                 uid="deadbeef",
                 frame_path=str(source),
+                is_key_frame=True,
             )
             await processor._expose_image(
                 frame_name="8",
                 image_data="ignored",
-                uid="second",
+                uid="deadbeef",
             )
 
+        # The flagged frame becomes the key frame, but every frame is saved
         assert processor.key_frame.endswith("deadbeef-7.jpg")
-        processor._save_clip.assert_awaited_once()
+        assert len(processor.exposed_images) == 2
+        assert processor.exposed_images[0].endswith("deadbeef-7.jpg")
+        assert processor.exposed_images[1].endswith("deadbeef-8.jpg")
+        assert processor._save_clip.await_count == 2
 
     @pytest.mark.asyncio
     async def test_select_keyframe_index_picks_lowest_similarity(self, processor):
@@ -358,6 +363,76 @@ class TestMediaProcessor:
             call.kwargs["base64_image"]
             for call in processor.client.add_frame.call_args_list
         ] == ["encoded-0", "encoded-1", "encoded-2"]
+
+    @pytest.mark.asyncio
+    async def test_record_exposes_every_frame(self, processor):
+        """record should log every frame sent to the LLM, flagging the keyframe."""
+        clock = {"now": 0.0}
+
+        async def fake_sleep(delay):
+            clock["now"] += delay
+
+        processor.hass.loop.run_in_executor.side_effect = (
+            lambda _executor, func, *args: func(*args)
+        )
+        processor.hass.states.get.return_value = SimpleNamespace(
+            attributes={"entity_picture": "/api/camera_proxy/camera.front"}
+        )
+        frame_iter = iter(
+            [
+                _make_jpeg_bytes("black"),
+                _make_jpeg_bytes("gray"),
+                _make_jpeg_bytes("white"),
+            ]
+        )
+
+        async def fake_fetch(*args, **kwargs):
+            frame = next(frame_iter, None)
+            if frame is None:
+                clock["now"] = 10.0
+            return frame
+
+        processor._fetch = AsyncMock(side_effect=fake_fetch)
+        processor._similarity_score = Mock(side_effect=[0.9, 0.1])
+        processor.resize_image = AsyncMock(
+            side_effect=["encoded-0", "encoded-1", "encoded-2"]
+        )
+        processor._select_keyframe_index = AsyncMock(return_value=0)
+        processor._expose_image = AsyncMock()
+
+        with patch(
+            "custom_components.llmvision.media_handlers.get_url",
+            return_value="http://ha.local",
+        ), patch(
+            "custom_components.llmvision.media_handlers.time.time",
+            side_effect=lambda: clock["now"],
+        ), patch(
+            "custom_components.llmvision.media_handlers.asyncio.sleep",
+            side_effect=fake_sleep,
+        ):
+            await processor.record(
+                image_entities=["camera.front"],
+                duration=2.5,
+                max_frames=3,
+                target_width=128,
+                include_filename=False,
+                expose_images=True,
+            )
+
+        # Every selected frame is logged
+        assert processor._expose_image.await_count == 3
+        # Exactly one frame (the keyframe at index 0) is flagged as key frame
+        key_flags = [
+            call.kwargs["is_key_frame"]
+            for call in processor._expose_image.await_args_list
+        ]
+        assert key_flags == [True, False, False]
+        # All exposed frames share the processor's uid prefix
+        uids = {
+            call.kwargs["uid"]
+            for call in processor._expose_image.await_args_list
+        }
+        assert uids == {processor.uid}
 
     @pytest.mark.asyncio
     async def test_record_raises_when_no_cameras_available(self, processor):
