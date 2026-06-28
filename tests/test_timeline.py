@@ -1066,7 +1066,7 @@ class TestCleanup:
     async def test_cleanup_protects_sibling_frames_of_linked_keyframe(
         self, build_timeline, tmp_path
     ):
-        """Frames sharing a linked key frame's uid prefix are kept (logged set)."""
+        """Frames sharing a linked key frame's group prefix are kept (logged set)."""
         tl = build_timeline()
         await tl._initialize_db()
         media_path = tmp_path / "snapshots"
@@ -1074,10 +1074,10 @@ class TestCleanup:
         tl._media_path = str(media_path)
 
         old_ts = datetime.datetime.now().timestamp() - 100
-        # Key frame stored in the event, plus sibling frames sharing its uid
-        key_frame = media_path / "abcd1234-camera0-frame-2.jpg"
-        sibling = media_path / "abcd1234-camera0-frame-0.jpg"
-        unrelated = media_path / "ffff9999-camera0-frame-0.jpg"
+        # Key frame stored in the event, plus sibling frames sharing its group id
+        key_frame = media_path / "2026-06-28-14-30-05__camera0-frame-2.jpg"
+        sibling = media_path / "2026-06-28-14-30-05__camera0-frame-0.jpg"
+        unrelated = media_path / "2026-06-28-09-15-00__camera0-frame-0.jpg"
         for f in (key_frame, sibling, unrelated):
             f.write_bytes(b"fake")
             os.utime(str(f), (old_ts, old_ts))

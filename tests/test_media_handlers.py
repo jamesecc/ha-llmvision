@@ -6,6 +6,7 @@ import io
 import base64
 from types import SimpleNamespace
 from homeassistant.exceptions import ServiceValidationError
+from custom_components.llmvision import media_handlers
 from custom_components.llmvision.media_handlers import MediaProcessor
 
 
@@ -141,21 +142,21 @@ class TestMediaProcessor:
             await processor._expose_image(
                 frame_name="7",
                 image_data=None,
-                uid="deadbeef",
+                group_id="2026-06-28-14-30-05",
                 frame_path=str(source),
                 is_key_frame=True,
             )
             await processor._expose_image(
                 frame_name="8",
                 image_data="ignored",
-                uid="deadbeef",
+                group_id="2026-06-28-14-30-05",
             )
 
         # The flagged frame becomes the key frame, but every frame is saved
-        assert processor.key_frame.endswith("deadbeef-7.jpg")
+        assert processor.key_frame.endswith("2026-06-28-14-30-05__7.jpg")
         assert len(processor.exposed_images) == 2
-        assert processor.exposed_images[0].endswith("deadbeef-7.jpg")
-        assert processor.exposed_images[1].endswith("deadbeef-8.jpg")
+        assert processor.exposed_images[0].endswith("2026-06-28-14-30-05__7.jpg")
+        assert processor.exposed_images[1].endswith("2026-06-28-14-30-05__8.jpg")
         assert processor._save_clip.await_count == 2
 
     @pytest.mark.asyncio
@@ -364,9 +365,12 @@ class TestMediaProcessor:
             for call in processor.client.add_frame.call_args_list
         ] == ["encoded-0", "encoded-1", "encoded-2"]
 
-    @pytest.mark.asyncio
-    async def test_record_exposes_every_frame(self, processor):
-        """record should log every frame sent to the LLM, flagging the keyframe."""
+    def _record_stream(self, processor, *, debug):
+        """Run record() over three frames, returning the patch context manager.
+
+        Helper that wires up the shared record() fixtures and toggles whether
+        debug logging is enabled (which controls logging of non-key frames).
+        """
         clock = {"now": 0.0}
 
         async def fake_sleep(delay):
@@ -400,16 +404,31 @@ class TestMediaProcessor:
         processor._select_keyframe_index = AsyncMock(return_value=0)
         processor._expose_image = AsyncMock()
 
-        with patch(
-            "custom_components.llmvision.media_handlers.get_url",
-            return_value="http://ha.local",
-        ), patch(
-            "custom_components.llmvision.media_handlers.time.time",
-            side_effect=lambda: clock["now"],
-        ), patch(
-            "custom_components.llmvision.media_handlers.asyncio.sleep",
-            side_effect=fake_sleep,
-        ):
+        return (
+            patch(
+                "custom_components.llmvision.media_handlers.get_url",
+                return_value="http://ha.local",
+            ),
+            patch(
+                "custom_components.llmvision.media_handlers.time.time",
+                side_effect=lambda: clock["now"],
+            ),
+            patch(
+                "custom_components.llmvision.media_handlers.asyncio.sleep",
+                side_effect=fake_sleep,
+            ),
+            patch.object(
+                media_handlers._LOGGER, "isEnabledFor", return_value=debug
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_record_exposes_every_frame_when_debug(self, processor):
+        """With debug logging on, record logs every frame sent to the LLM."""
+        get_url_patch, time_patch, sleep_patch, log_patch = self._record_stream(
+            processor, debug=True
+        )
+        with get_url_patch, time_patch, sleep_patch, log_patch:
             await processor.record(
                 image_entities=["camera.front"],
                 duration=2.5,
@@ -427,12 +446,32 @@ class TestMediaProcessor:
             for call in processor._expose_image.await_args_list
         ]
         assert key_flags == [True, False, False]
-        # All exposed frames share the processor's uid prefix
-        uids = {
-            call.kwargs["uid"]
+        # All exposed frames share the processor's group prefix
+        groups = {
+            call.kwargs["group_id"]
             for call in processor._expose_image.await_args_list
         }
-        assert uids == {processor.uid}
+        assert groups == {processor.group_id}
+
+    @pytest.mark.asyncio
+    async def test_record_exposes_only_keyframe_without_debug(self, processor):
+        """Without debug logging, record exposes only the chosen key frame."""
+        get_url_patch, time_patch, sleep_patch, log_patch = self._record_stream(
+            processor, debug=False
+        )
+        with get_url_patch, time_patch, sleep_patch, log_patch:
+            await processor.record(
+                image_entities=["camera.front"],
+                duration=2.5,
+                max_frames=3,
+                target_width=128,
+                include_filename=False,
+                expose_images=True,
+            )
+
+        # Only the key frame (index 0) is exposed
+        assert processor._expose_image.await_count == 1
+        assert processor._expose_image.await_args.kwargs["is_key_frame"] is True
 
     @pytest.mark.asyncio
     async def test_record_raises_when_no_cameras_available(self, processor):
@@ -484,6 +523,8 @@ class TestMediaProcessor:
         with patch(
             "custom_components.llmvision.media_handlers.get_url",
             return_value="http://ha.local",
+        ), patch.object(
+            media_handlers._LOGGER, "isEnabledFor", return_value=True
         ):
             result = await processor.add_images(
                 image_entities=["camera.front"],
@@ -498,7 +539,50 @@ class TestMediaProcessor:
             call.kwargs["filename"]
             for call in processor.client.add_frame.call_args_list
         ] == ["Front Door", "still"]
+        # With debug logging on, every frame sent to the LLM is logged
         assert processor._expose_image.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_add_images_exposes_only_keyframe_without_debug(
+        self, processor, tmp_path
+    ):
+        """Without debug logging, add_images exposes only the first (key) frame."""
+        image_path = tmp_path / "still.jpg"
+        image_path.write_bytes(_make_jpeg_bytes("teal"))
+        entity_state = SimpleNamespace(
+            attributes={
+                "entity_picture": "/api/camera_proxy/camera.front",
+                "friendly_name": "Front Door",
+            }
+        )
+        processor.hass.states.get.return_value = entity_state
+        processor._fetch = AsyncMock(return_value=b"entity-bytes")
+        processor.resize_image = AsyncMock(side_effect=["entity-frame", "path-frame"])
+
+        # Mimic the real _expose_image marking the first frame as the key frame
+        async def fake_expose(*, is_key_frame, **kwargs):
+            if is_key_frame and processor.key_frame == "":
+                processor.key_frame = "key.jpg"
+
+        processor._expose_image = AsyncMock(side_effect=fake_expose)
+
+        with patch(
+            "custom_components.llmvision.media_handlers.get_url",
+            return_value="http://ha.local",
+        ), patch.object(
+            media_handlers._LOGGER, "isEnabledFor", return_value=False
+        ):
+            await processor.add_images(
+                image_entities=["camera.front"],
+                image_paths=[str(image_path)],
+                target_width=128,
+                include_filename=True,
+                expose_images=True,
+            )
+
+        # Only the first frame (the key frame) is exposed
+        assert processor._expose_image.await_count == 1
+        assert processor._expose_image.await_args.kwargs["is_key_frame"] is True
 
     @pytest.mark.asyncio
     async def test_add_images_raises_for_missing_file(self, processor):

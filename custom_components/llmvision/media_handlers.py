@@ -38,9 +38,10 @@ class MediaProcessor:
         self.key_frame = ""
         # Paths of every frame that was sent to the LLM and written to disk
         self.exposed_images = []
-        # Shared id for all frames belonging to this analysis so they can be
-        # grouped together (and protected from timeline cleanup) on disk
-        self.uid = uuid.uuid4().hex[:8]
+        # Per-analysis group id (local timestamp) used to prefix every saved
+        # frame, so all frames from one event share a readable, sortable prefix
+        # and can be grouped together (and protected from timeline cleanup).
+        self.group_id = time.strftime("%Y-%m-%d-%H-%M-%S")
 
     async def _encode_image(self, img):
         """Encode image as base64"""
@@ -80,7 +81,7 @@ class MediaProcessor:
         return img
 
     async def _expose_image(
-        self, frame_name, image_data, uid=None, frame_path=None, is_key_frame=False
+        self, frame_name, image_data, group_id=None, frame_path=None, is_key_frame=False
     ):
         """Write a frame that was sent to the LLM to the snapshots directory.
 
@@ -89,14 +90,18 @@ class MediaProcessor:
         ``self.exposed_images``. The frame flagged as the key frame (or, if
         none is flagged, the first exposed frame) is stored in
         ``self.key_frame`` and is what gets linked in the timeline.
+
+        Frames are named ``<group_id>__<frame_name>.jpg`` where ``group_id`` is
+        a per-analysis timestamp, so every frame from one event shares a
+        readable prefix (e.g. ``2026-06-28-14-30-05__front_door-frame-0.jpg``).
         """
-        uid = uid or self.uid
+        group_id = group_id or self.group_id
         # ensure /media/llmvision/snapshots dir exists
         await self.hass.loop.run_in_executor(
             None,
             partial(os.makedirs, f"/media/{DOMAIN}/snapshots", exist_ok=True),
         )
-        filename = f"/media/{DOMAIN}/snapshots/{uid}-{frame_name}.jpg"
+        filename = f"/media/{DOMAIN}/snapshots/{group_id}__{frame_name}.jpg"
         if image_data is None and frame_path is not None:
             # open image in hass.loop
             with await self.hass.loop.run_in_executor(
@@ -518,13 +523,18 @@ class MediaProcessor:
                 self.client.add_frame(base64_image=resized_image, filename=frame_name)
 
             if expose_images:
-                # Log every frame sent to the LLM, flagging the chosen keyframe
+                # Always expose the chosen key frame. Only log the remaining
+                # frames sent to the LLM when debug logging is enabled.
+                log_all_frames = _LOGGER.isEnabledFor(logging.DEBUG)
                 for idx, (frame_name, _, _) in enumerate(selected_frames):
+                    is_key_frame = idx == key_idx
+                    if not is_key_frame and not log_all_frames:
+                        continue
                     await self._expose_image(
                         frame_name=frame_name,
                         image_data=resized_base64[idx],
-                        uid=self.uid,
-                        is_key_frame=(idx == key_idx),
+                        group_id=self.group_id,
+                        is_key_frame=is_key_frame,
                     )
 
     async def add_images(
@@ -536,6 +546,9 @@ class MediaProcessor:
         successful_image_entities = 0
         # Counter for unique exposed-frame filenames within this analysis
         frame_index = 0
+        # Always expose the first (key) frame; only log the rest when debug
+        # logging is enabled.
+        log_all_frames = _LOGGER.isEnabledFor(logging.DEBUG)
 
         if image_entities:
             for image_entity in image_entities:
@@ -577,11 +590,11 @@ class MediaProcessor:
                         ),
                     )
 
-                    if expose_images:
+                    if expose_images and (self.key_frame == "" or log_all_frames):
                         await self._expose_image(
                             frame_name=str(frame_index),
                             image_data=resized_image,
-                            uid=self.uid,
+                            group_id=self.group_id,
                             is_key_frame=(self.key_frame == ""),
                         )
                         frame_index += 1
@@ -622,11 +635,11 @@ class MediaProcessor:
 
                     self.client.add_frame(base64_image=image_data, filename=filename)
 
-                    if expose_images:
+                    if expose_images and (self.key_frame == "" or log_all_frames):
                         await self._expose_image(
                             frame_name=str(frame_index),
                             image_data=image_data,
-                            uid=self.uid,
+                            group_id=self.group_id,
                             is_key_frame=(self.key_frame == ""),
                         )
                         frame_index += 1
@@ -925,20 +938,25 @@ class MediaProcessor:
                 )
 
             if expose_images and selected_frames:
-                # Log every frame sent to the LLM, flagging the chosen keyframe
+                # Always expose the chosen key frame. Only log the remaining
+                # frames sent to the LLM when debug logging is enabled.
                 reference_bytes = selected_frames[0][0]
                 candidate_bytes = [fd for (fd, _, _) in selected_frames]
                 key_idx = await self._select_keyframe_index(
                     reference_bytes, candidate_bytes
                 )
+                log_all_frames = _LOGGER.isEnabledFor(logging.DEBUG)
                 # selected_frames items are (frame_bytes, score, original_index)
                 for idx, (_, _, original_index) in enumerate(selected_frames):
+                    is_key_frame = idx == key_idx
+                    if not is_key_frame and not log_all_frames:
+                        continue
                     frame_idx_label = (original_index or 0) + 1
                     await self._expose_image(
                         frame_name=f"video{video_index}-frame-{frame_idx_label}",
                         image_data=resized_base64[idx],
-                        uid=self.uid,
-                        is_key_frame=(idx == key_idx),
+                        group_id=self.group_id,
+                        is_key_frame=is_key_frame,
                     )
         except Exception as e:
             raise ServiceValidationError(f"Error processing video {video_path}: {e}")
