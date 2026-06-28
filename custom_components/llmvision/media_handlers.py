@@ -1038,3 +1038,34 @@ class MediaProcessor:
             expose_images=expose_images,
         )
         return self.client
+
+    async def add_memory_images(self, memory, expose_images):
+        """Log the memory (reference) images that are sent to the LLM.
+
+        Memory images are injected into the request by the providers and are
+        not part of the analyzed frames, so they bypass the normal exposure
+        path. They are only written to disk when expose_images is enabled and
+        debug logging is on, matching the gating used for non-key frames. They
+        share the analysis group prefix and are named ``memory-<i>-<tag>``.
+        """
+        if not expose_images or memory is None:
+            return
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+
+        memory_images = getattr(memory, "memory_images", None) or []
+        memory_strings = getattr(memory, "memory_strings", None) or []
+
+        for idx, image in enumerate(memory_images):
+            tag = memory_strings[idx] if idx < len(memory_strings) else str(idx)
+            # Sanitize the tag so it is safe to use in a filename
+            safe_tag = (
+                "".join(c if c.isalnum() or c in "-_" else "_" for c in str(tag))
+                or str(idx)
+            )
+            await self._expose_image(
+                frame_name=f"memory-{idx}-{safe_tag}",
+                image_data=image,
+                group_id=self.group_id,
+                is_key_frame=False,
+            )

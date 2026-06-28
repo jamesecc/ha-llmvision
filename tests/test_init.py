@@ -526,9 +526,11 @@ class TestSetupServices:
         memory_obj._update_memory = AsyncMock()
         processor = Mock()
         processor.key_frame = "frame.jpg"
+        processor.exposed_images = []
         processor.add_images = AsyncMock(return_value=request_obj)
         processor.add_videos = AsyncMock(return_value=request_obj)
         processor.add_streams = AsyncMock(return_value=request_obj)
+        processor.add_memory_images = AsyncMock()
 
         with (
             patch("custom_components.llmvision.ServiceCallData", return_value=call_obj),
@@ -567,7 +569,9 @@ class TestSetupServices:
         memory_obj._update_memory = AsyncMock()
         processor = Mock()
         processor.key_frame = ""
+        processor.exposed_images = []
         processor.add_visual_data = AsyncMock(return_value=request_obj)
+        processor.add_memory_images = AsyncMock()
         call_obj = ServiceCallData(
             _build_data_call(_base_service_data(message="status"))
         )

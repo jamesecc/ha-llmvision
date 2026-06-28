@@ -93,7 +93,7 @@ image_analyzer:
         boolean:
     expose_images:
       name: Expose Images
-      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every frame sent to the LLM is saved (not just the key frame). Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
+      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every image sent to the LLM is saved (not just the key frame), including memory/reference images. Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
       required: false
       example: false
       default: false
@@ -240,7 +240,7 @@ video_analyzer:
         boolean:
     expose_images:
       name: Expose Images
-      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every frame sent to the LLM is saved (not just the key frame). Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
+      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every image sent to the LLM is saved (not just the key frame), including memory/reference images. Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
       required: false
       example: false
       default: false
@@ -390,7 +390,7 @@ stream_analyzer:
         boolean:
     expose_images:
       name: Expose Images
-      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every frame sent to the LLM is saved (not just the key frame). Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
+      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every image sent to the LLM is saved (not just the key frame), including memory/reference images. Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
       required: false
       example: false
       default: false
@@ -537,7 +537,7 @@ data_analyzer:
         boolean:
     expose_images:
       name: Expose Images
-      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every frame sent to the LLM is saved (not just the key frame). Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
+      description: Save the key frame in /media/llmvision/snapshots so it can be used for notifications. When debug logging is enabled for the integration, every image sent to the LLM is saved (not just the key frame), including memory/reference images. Frames from one analysis share a timestamp prefix (e.g. 2026-06-28-14-30-05__front_door-frame-0.jpg) so you can tell which event they belong to. The key frame path and the list of saved frames are included in the response (key_frame and exposed_images).
       required: false
       example: false
       default: false

@@ -585,6 +585,62 @@ class TestMediaProcessor:
         assert processor._expose_image.await_args.kwargs["is_key_frame"] is True
 
     @pytest.mark.asyncio
+    async def test_add_memory_images_logs_each_image_when_debug(self, processor):
+        """Memory reference images are logged (debug + expose_images on)."""
+        processor._expose_image = AsyncMock()
+        memory = SimpleNamespace(
+            memory_images=["b64-a", "b64-b"],
+            memory_strings=["Front Door", "My Car/Truck"],
+        )
+
+        with patch.object(
+            media_handlers._LOGGER, "isEnabledFor", return_value=True
+        ):
+            await processor.add_memory_images(memory, expose_images=True)
+
+        assert processor._expose_image.await_count == 2
+        names = [
+            call.kwargs["frame_name"]
+            for call in processor._expose_image.await_args_list
+        ]
+        # Tags are sanitized for use in filenames; never flagged as key frame
+        assert names == ["memory-0-Front_Door", "memory-1-My_Car_Truck"]
+        assert all(
+            call.kwargs["is_key_frame"] is False
+            for call in processor._expose_image.await_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_memory_images_skips_without_debug(self, processor):
+        """Memory images are not logged when debug logging is disabled."""
+        processor._expose_image = AsyncMock()
+        memory = SimpleNamespace(
+            memory_images=["b64-a"], memory_strings=["tag"]
+        )
+
+        with patch.object(
+            media_handlers._LOGGER, "isEnabledFor", return_value=False
+        ):
+            await processor.add_memory_images(memory, expose_images=True)
+
+        processor._expose_image.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_add_memory_images_skips_when_not_exposing(self, processor):
+        """Memory images are not logged when expose_images is disabled."""
+        processor._expose_image = AsyncMock()
+        memory = SimpleNamespace(
+            memory_images=["b64-a"], memory_strings=["tag"]
+        )
+
+        with patch.object(
+            media_handlers._LOGGER, "isEnabledFor", return_value=True
+        ):
+            await processor.add_memory_images(memory, expose_images=False)
+
+        processor._expose_image.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_add_images_raises_for_missing_file(self, processor):
         """add_images should reject missing local image files."""
         with patch(

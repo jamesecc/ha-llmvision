@@ -697,6 +697,8 @@ def setup(hass, config):
 
         call.memory = Memory(hass)
         await call.memory._update_memory()
+        # Log memory (reference) images sent to the LLM (debug logging only)
+        await processor.add_memory_images(call.memory, call.expose_images)
 
         # Validate configuration, input data and make the call
         response = await request.call(call)
@@ -742,6 +744,8 @@ def setup(hass, config):
         )
         call.memory = Memory(hass)
         await call.memory._update_memory()
+        # Log memory (reference) images sent to the LLM (debug logging only)
+        await processor.add_memory_images(call.memory, call.expose_images)
 
         response = await request.call(call)
         # Add processor.key_frame to response if it exists
@@ -786,6 +790,8 @@ def setup(hass, config):
 
         call.memory = Memory(hass)
         await call.memory._update_memory()
+        # Log memory (reference) images sent to the LLM (debug logging only)
+        await processor.add_memory_images(call.memory, call.expose_images)
 
         response = await request.call(call)
         # Add processor.key_frame to response if it exists
@@ -868,6 +874,8 @@ def setup(hass, config):
 
         call.memory = Memory(hass, system_prompt=DATA_EXTRACTION_PROMPT)
         await call.memory._update_memory()
+        # Log memory (reference) images sent to the LLM (debug logging only)
+        await processor.add_memory_images(call.memory, call.expose_images)
 
         response = await request.call(call)
         # Add processor.key_frame to response if it exists
